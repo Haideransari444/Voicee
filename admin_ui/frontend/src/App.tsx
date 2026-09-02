@@ -1,0 +1,225 @@
+import React, { useEffect, useState, Suspense, lazy } from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { Toaster } from 'sonner';
+import { ConfirmDialogProvider } from './hooks/useConfirmDialog';
+import AppShell from './components/layout/AppShell';
+import Dashboard from './pages/Dashboard';
+import OperationsDashboard from './pages/OperationsDashboard';
+import AnalyticsPage from './pages/AnalyticsPage';
+import CampaignsPage from './pages/CampaignsPage';
+import LeadsPage from './pages/LeadsPage';
+import KnowledgeBasePage from './pages/KnowledgeBasePage';
+import QualificationRulesPage from './pages/QualificationRulesPage';
+import BusinessSettingsPage from './pages/BusinessSettingsPage';
+import CallHistoryPage from './pages/CallHistoryPage';
+import CallSchedulingPage from './pages/CallSchedulingPage';
+import CallbacksPage from './pages/CallbacksPage';
+import axios from 'axios';
+import { PRODUCT } from './config/product';
+
+// Auth
+import { AuthProvider } from './auth/AuthContext';
+import { RequireAuth } from './auth/RequireAuth';
+import LoginPage from './pages/LoginPage';
+
+// Core Configuration Pages
+import ProvidersPage from './pages/ProvidersPage';
+import PipelinesPage from './pages/PipelinesPage';
+import AgentsPage from './pages/AgentsPage';
+import MigrationStatusPage from './pages/MigrationStatusPage';
+import LegacyContextsRedirect from './pages/LegacyContextsRedirect';
+import ProfilesPage from './pages/ProfilesPage';
+import ToolsPage from './pages/ToolsPage';
+import MCPPage from './pages/MCPPage';
+
+// Advanced Configuration Pages
+import VADPage from './pages/Advanced/VADPage';
+import StreamingPage from './pages/Advanced/StreamingPage';
+import LLMPage from './pages/Advanced/LLMPage';
+import TransportPage from './pages/Advanced/TransportPage';
+import BargeInPage from './pages/Advanced/BargeInPage';
+
+// System Pages (eagerly loaded)
+import EnvPage from './pages/System/EnvPage';
+import DockerPage from './pages/System/DockerPage';
+
+// Help
+import HelpPage from './pages/HelpPage';
+
+// Lazy-loaded heavy pages (code-splitting for better initial load)
+const Wizard = lazy(() => import('./pages/Wizard'));
+const RawYamlPage = lazy(() => import('./pages/Advanced/RawYamlPage'));
+const LogsPage = lazy(() => import('./pages/System/LogsPage'));
+const TerminalPage = lazy(() => import('./pages/System/TerminalPage'));
+const ModelsPage = lazy(() => import('./pages/System/ModelsPage'));
+const UpdatesPage = lazy(() => import('./pages/System/UpdatesPage'));
+const AsteriskPage = lazy(() => import('./pages/System/AsteriskPage'));
+
+// Loading fallback for lazy-loaded pages
+const PageLoader = () => (
+    <div className="flex items-center justify-center min-h-[400px]">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+    </div>
+);
+
+// Auth/Setup Guard
+const SetupGuard = ({ children }: { children: React.ReactNode }) => {
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+    const [retryCount, setRetryCount] = useState(0);
+    const navigate = useNavigate();
+    const location = useLocation();
+
+    useEffect(() => {
+        let mounted = true;
+
+        const checkStatus = async () => {
+            try {
+                // Add timeout to prevent hanging
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+                const res = await axios.get('/api/wizard/status', {
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+
+                if (mounted) {
+                    // If not configured and not already on wizard, redirect
+                    if (!res.data.configured && location.pathname !== '/wizard') {
+                        navigate('/wizard');
+                    }
+                    setLoading(false);
+                }
+            } catch (err) {
+                console.error('Failed to check setup status', err);
+                if (mounted) {
+                    // Backend unreachable: surface a clear error instead of
+                    // rendering the app over a dead backend (broken-looking UI).
+                    setError('Could not reach the backend API.');
+                    setLoading(false);
+                }
+            }
+        };
+
+        setLoading(true);
+        setError(null);
+        checkStatus();
+
+        return () => {
+            mounted = false;
+        };
+    }, [navigate, location.pathname, retryCount]);
+
+    if (loading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center flex-col gap-4">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+                <p className="text-muted-foreground text-sm">Connecting to system...</p>
+            </div>
+        );
+    }
+
+    if (error) {
+        console.warn("SetupGuard: backend unreachable:", error);
+        return (
+            <div className="min-h-screen flex items-center justify-center flex-col gap-4 px-6 text-center">
+                <h1 className="text-xl font-semibold">Backend unavailable</h1>
+                <p className="text-muted-foreground text-sm max-w-md">
+                    {error} {PRODUCT.name} cannot load until the backend service is running and reachable.
+                    Check that the service is up, then retry.
+                </p>
+                <button
+                    onClick={() => setRetryCount((c) => c + 1)}
+                    className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+                >
+                    Retry
+                </button>
+            </div>
+        );
+    }
+
+    return <>{children}</>;
+};
+
+function App() {
+    return (
+        <AuthProvider>
+            <ConfirmDialogProvider>
+            <Toaster position="top-right" richColors closeButton />
+            <Router>
+                <Routes>
+                    <Route path="/login" element={<LoginPage />} />
+
+                    <Route path="*" element={
+                        <RequireAuth>
+                            <SetupGuard>
+                                <Suspense fallback={<PageLoader />}>
+                                    <Routes>
+                                        {/* Setup Wizard Route (lazy) */}
+                                        <Route path="/wizard" element={<Wizard />} />
+
+                                        {/* Main Application Layout */}
+                                        <Route element={<AppShell />}>
+                                            <Route path="/" element={<OperationsDashboard />} />
+                                            <Route path="/analytics" element={<AnalyticsPage />} />
+                                            <Route path="/campaigns" element={<CampaignsPage />} />
+                                            <Route path="/leads" element={<LeadsPage />} />
+                                            <Route path="/calls" element={<CallHistoryPage />} />
+                                            <Route path="/history" element={<Navigate to="/calls" replace />} />
+                                            <Route path="/callbacks" element={<CallbacksPage />} />
+                                            <Route path="/scheduling" element={<CallSchedulingPage />} />
+                                            <Route path="/knowledge-base" element={<KnowledgeBasePage />} />
+                                            <Route path="/qualification-rules" element={<QualificationRulesPage />} />
+                                            <Route path="/settings/general" element={<BusinessSettingsPage section="general" />} />
+                                            <Route path="/settings/telephony" element={<BusinessSettingsPage section="telephony" />} />
+                                            <Route path="/settings/integrations" element={<BusinessSettingsPage section="integrations" />} />
+                                            <Route path="/developer/system-health" element={<Dashboard />} />
+
+                                            {/* Core Configuration */}
+                                            <Route path="/providers" element={<ProvidersPage />} />
+                                            <Route path="/pipelines" element={<PipelinesPage />} />
+                                            <Route path="/agents" element={<AgentsPage />} />
+                                            <Route path="/agents/migration" element={<MigrationStatusPage />} />
+                                            <Route path="/contexts" element={<LegacyContextsRedirect />} />
+                                            <Route path="/profiles" element={<ProfilesPage />} />
+                                            <Route path="/tools" element={<ToolsPage />} />
+                                            <Route path="/mcp" element={<MCPPage />} />
+
+                                            {/* Advanced Settings */}
+                                            <Route path="/vad" element={<VADPage />} />
+                                            <Route path="/streaming" element={<StreamingPage />} />
+                                            <Route path="/llm" element={<LLMPage />} />
+                                            <Route path="/transport" element={<TransportPage />} />
+                                            <Route path="/barge-in" element={<BargeInPage />} />
+                                            <Route path="/yaml" element={<RawYamlPage />} />
+
+                                            {/* System Management */}
+                                            <Route path="/env" element={<EnvPage />} />
+                                            <Route path="/docker" element={<DockerPage />} />
+                                            <Route path="/asterisk" element={<AsteriskPage />} />
+                                            <Route path="/logs" element={<LogsPage />} />
+                                            <Route path="/terminal" element={<TerminalPage />} />
+                                            <Route path="/models" element={<ModelsPage />} />
+                                            <Route path="/updates" element={<UpdatesPage />} />
+
+                                            {/* Help */}
+                                            <Route path="/help" element={<HelpPage />} />
+
+                                            {/* Fallback */}
+                                            <Route path="*" element={<Navigate to="/" replace />} />
+                                        </Route>
+                                    </Routes>
+                                </Suspense>
+                            </SetupGuard>
+                        </RequireAuth>
+                    } />
+                </Routes>
+            </Router>
+            </ConfirmDialogProvider>
+        </AuthProvider>
+    );
+}
+
+export default App;
