@@ -914,6 +914,9 @@ BUILTIN_RESERVED_TOOL_NAMES = frozenset({
     "leave_voicemail", "check_extension_status",
     "send_email_summary", "request_transcript",
     "google_calendar", "microsoft_calendar",
+    "search_knowledge_base", "get_lead_context",
+    "update_lead_qualification", "evaluate_qualification",
+    "set_lead_outcome", "schedule_callback", "mark_do_not_call",
     # Engine-registered tool names the AI calls (may differ from config keys).
     "transfer_call", "transfer_to_queue", "live_agent_transfer",
 })

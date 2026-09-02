@@ -624,6 +624,9 @@ tools:
   ai_identity:
     name: AI Agent
     number: '6789'
+  attended_transfer:
+    enabled: true
+    screening_mode: direct
   
   # ============================================================================
   # Phase Tools (Milestone 24) - Pre-call and Post-call HTTP integrations
@@ -906,6 +909,7 @@ tools:
     technology: PJSIP
     destinations:
       sales_agent:
+        attended_allowed: true
         description: Sales agent
         dialplan_context: from-internal
         target: '2765'

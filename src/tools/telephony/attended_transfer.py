@@ -31,10 +31,10 @@ class AttendedTransferTool(Tool):
         return ToolDefinition(
             name="attended_transfer",
             description=(
-                "Warm transfer to a configured extension with a one-way announcement to the agent, "
-                "then DTMF acceptance (1=accept, 2=decline). Caller is placed on MOH while the agent is contacted. "
+                "Warm transfer to a configured extension. Depending on configuration, the answered agent is either "
+                "connected directly or receives a one-way announcement followed by DTMF acceptance. Caller is placed on MOH while the agent is contacted. "
                 "The screening payload can be a basic TTS briefing, an experimental AI-generated summary, or a caller-recorded screening clip, depending on config. "
-                "Use when you must brief a human before connecting the caller. "
+                "Use when you need to connect the caller to a configured human destination. "
                 "Use exact configured destination keys exposed in the runtime prompt/context."
             ),
             category=ToolCategory.TELEPHONY,
@@ -372,7 +372,7 @@ class AttendedTransferTool(Tool):
 
     def _resolve_screening_mode(self, attended_cfg: Dict[str, Any]) -> str:
         raw_mode = str((attended_cfg or {}).get("screening_mode") or "").strip().lower()
-        if raw_mode in {"basic_tts", "caller_recording", "ai_briefing"}:
+        if raw_mode in {"direct", "basic_tts", "caller_recording", "ai_briefing"}:
             return raw_mode
         if raw_mode == "ai_summary":
             return "ai_briefing"

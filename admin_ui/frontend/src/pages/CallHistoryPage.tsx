@@ -656,7 +656,11 @@ const CallHistoryPage = () => {
         <div className="space-y-6">
             {/* Header */}
             <div className="flex items-center justify-between">
-                <h1 className="text-3xl font-bold">Call History</h1>
+                <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-primary">Outbound operations</p>
+                    <h1 className="text-3xl font-semibold tracking-[-0.035em]">Calls</h1>
+                    <p className="mt-2 text-sm text-muted-foreground">Review conversations, outcomes, recordings, transcripts, and execution details.</p>
+                </div>
                 <div className="flex items-center gap-2">
                     <div className="relative">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -970,7 +974,7 @@ const CallHistoryPage = () => {
 
             {/* Call List */}
             {!loading && !error && calls.length > 0 && (
-                <FullscreenPanel title="Call History">
+                <FullscreenPanel title="Calls">
                     <div className="bg-card border rounded-lg overflow-x-auto">
                         <table className="w-full min-w-[1000px]">
                             <thead className="bg-muted/50">
@@ -1090,6 +1094,7 @@ const CallHistoryPage = () => {
                         tabIndex={-1}
                         role="dialog"
                         aria-modal="true"
+                        aria-label="Call Details"
                         aria-labelledby="call-details-title"
                         className="bg-card border rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col focus:outline-none"
                     >

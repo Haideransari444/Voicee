@@ -51,6 +51,10 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --chown=appuser:appuser src/ ./src
 COPY --chown=appuser:appuser config/ ./config
 COPY --chown=appuser:appuser main.py ./
+# The runtime demo seed uses the existing Agent write store.  Keep this single
+# source-of-truth module available to ai_engine without copying the Admin UI.
+RUN mkdir -p /app/admin_ui/backend
+COPY --chown=appuser:appuser admin_ui/backend/agents_store.py ./admin_ui/backend/agents_store.py
 
 # Prepare log directory for file logging
 RUN mkdir -p /app/logs && chown appuser:appuser /app/logs

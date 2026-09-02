@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { Lock, User, AlertCircle } from 'lucide-react';
+import { PRODUCT } from '../config/product';
 
 const LoginPage: React.FC = () => {
     const [username, setUsername] = useState('');
@@ -12,7 +13,7 @@ const LoginPage: React.FC = () => {
     const navigate = useNavigate();
     const location = useLocation();
 
-    const from = (location.state as any)?.from?.pathname || '/';
+    const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname || '/';
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -32,16 +33,9 @@ const LoginPage: React.FC = () => {
         <div className="min-h-screen flex items-center justify-center bg-background p-4">
             <div className="w-full max-w-md space-y-8 bg-card p-8 rounded-lg border border-border shadow-lg">
                 <div className="text-center">
-                    <div className="flex items-center justify-center mb-4">
-                        <img
-                            src="/mascot_transparent.png"
-                            alt="AVA Mascot"
-                            className="w-24 h-auto relative z-10 -mr-6"
-                        />
-                        <h2 className="text-3xl font-bold text-foreground relative z-0">Asterisk AI Voice Agent</h2>
-                    </div>
+                    <img src="/callflow-logo.png" alt={`${PRODUCT.name} logo`} className="mx-auto mb-5 h-14 w-64 object-contain brightness-0 invert" />
                     <p className="mt-2 text-sm text-muted-foreground">
-                        Sign in to manage your AI Voice Agent
+                        Sign in to {PRODUCT.subtitle}
                     </p>
                 </div>
 

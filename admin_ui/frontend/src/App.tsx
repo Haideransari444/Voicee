@@ -4,9 +4,18 @@ import { Toaster } from 'sonner';
 import { ConfirmDialogProvider } from './hooks/useConfirmDialog';
 import AppShell from './components/layout/AppShell';
 import Dashboard from './pages/Dashboard';
+import OperationsDashboard from './pages/OperationsDashboard';
+import AnalyticsPage from './pages/AnalyticsPage';
+import CampaignsPage from './pages/CampaignsPage';
+import LeadsPage from './pages/LeadsPage';
+import KnowledgeBasePage from './pages/KnowledgeBasePage';
+import QualificationRulesPage from './pages/QualificationRulesPage';
+import BusinessSettingsPage from './pages/BusinessSettingsPage';
 import CallHistoryPage from './pages/CallHistoryPage';
 import CallSchedulingPage from './pages/CallSchedulingPage';
+import CallbacksPage from './pages/CallbacksPage';
 import axios from 'axios';
+import { PRODUCT } from './config/product';
 
 // Auth
 import { AuthProvider } from './auth/AuthContext';
@@ -118,7 +127,7 @@ const SetupGuard = ({ children }: { children: React.ReactNode }) => {
             <div className="min-h-screen flex items-center justify-center flex-col gap-4 px-6 text-center">
                 <h1 className="text-xl font-semibold">Backend unavailable</h1>
                 <p className="text-muted-foreground text-sm max-w-md">
-                    {error} The admin UI cannot load until the AVA backend is running and reachable.
+                    {error} {PRODUCT.name} cannot load until the backend service is running and reachable.
                     Check that the service is up, then retry.
                 </p>
                 <button
@@ -153,9 +162,20 @@ function App() {
 
                                         {/* Main Application Layout */}
                                         <Route element={<AppShell />}>
-                                            <Route path="/" element={<Dashboard />} />
-                                            <Route path="/history" element={<CallHistoryPage />} />
+                                            <Route path="/" element={<OperationsDashboard />} />
+                                            <Route path="/analytics" element={<AnalyticsPage />} />
+                                            <Route path="/campaigns" element={<CampaignsPage />} />
+                                            <Route path="/leads" element={<LeadsPage />} />
+                                            <Route path="/calls" element={<CallHistoryPage />} />
+                                            <Route path="/history" element={<Navigate to="/calls" replace />} />
+                                            <Route path="/callbacks" element={<CallbacksPage />} />
                                             <Route path="/scheduling" element={<CallSchedulingPage />} />
+                                            <Route path="/knowledge-base" element={<KnowledgeBasePage />} />
+                                            <Route path="/qualification-rules" element={<QualificationRulesPage />} />
+                                            <Route path="/settings/general" element={<BusinessSettingsPage section="general" />} />
+                                            <Route path="/settings/telephony" element={<BusinessSettingsPage section="telephony" />} />
+                                            <Route path="/settings/integrations" element={<BusinessSettingsPage section="integrations" />} />
+                                            <Route path="/developer/system-health" element={<Dashboard />} />
 
                                             {/* Core Configuration */}
                                             <Route path="/providers" element={<ProvidersPage />} />

@@ -641,6 +641,30 @@ Tool Definitions:
             self.register(MicrosoftCalendarTool)
         except ImportError as e:
             logger.warning(f"Could not import MicrosoftCalendarTool: {e}")
+
+        try:
+            from src.tools.business.outbound_sdr import (
+                EvaluateQualificationTool,
+                GetLeadContextTool,
+                MarkDoNotCallTool,
+                ScheduleCallbackTool,
+                SearchKnowledgeBaseTool,
+                SetLeadOutcomeTool,
+                UpdateLeadQualificationTool,
+            )
+
+            for tool_class in (
+                SearchKnowledgeBaseTool,
+                GetLeadContextTool,
+                UpdateLeadQualificationTool,
+                EvaluateQualificationTool,
+                SetLeadOutcomeTool,
+                ScheduleCallbackTool,
+                MarkDoNotCallTool,
+            ):
+                self.register(tool_class)
+        except ImportError as e:
+            logger.warning(f"Could not import outbound SDR tools: {e}")
         
         # Future tools will be registered here:
         # from src.tools.telephony.voicemail import SendToVoicemailTool

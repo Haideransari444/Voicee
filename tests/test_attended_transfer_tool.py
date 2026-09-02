@@ -82,6 +82,13 @@ def test_destination_key_resolution_prefers_exact_and_target_matches():
     assert tool._resolve_destination_key("support", destinations, allowed) == "support_agent"
 
 
+def test_screening_mode_resolution_supports_direct():
+    tool = AttendedTransferTool()
+
+    assert tool._resolve_screening_mode({"screening_mode": "direct"}) == "direct"
+    assert tool._resolve_screening_mode({"screening_mode": "basic_tts"}) == "basic_tts"
+
+
 def test_resolve_dial_endpoint_honors_dial_string_then_internal_mapping_then_technology():
     tool = AttendedTransferTool()
 

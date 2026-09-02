@@ -87,6 +87,9 @@ interface OutboundCampaign {
     consent_media_uri?: string | null;
     consent_timeout_seconds?: number | null;
     amd_options?: Record<string, any>;
+    system_prompt?: string | null;
+    qualification_rules?: Record<string, any>;
+    human_transfer_destination?: string | null;
 }
 
 interface CampaignStats {
@@ -114,7 +117,22 @@ interface LeadRow {
     last_provider?: string | null;
     last_call_history_call_id?: string | null;
     last_error_message?: string | null;
+    outcome_reason?: string | null;
+    qualification_score?: number | null;
+    qualification_state?: Record<string, any>;
+    qualification_result?: Record<string, any>;
+    do_not_call_at_utc?: string | null;
+    callback_at_utc?: string | null;
 }
+
+type KnowledgeDocument = {
+    id: string;
+    name: string;
+    content_type: string;
+    character_count: number;
+    chunk_count: number;
+    created_at_utc: string;
+};
 
 const DEFAULT_AMD_OPTIONS = {
     initial_silence_ms: 2000,
@@ -307,12 +325,15 @@ const CallSchedulingPage = () => {
 
     const [showCampaignModal, setShowCampaignModal] = useState(false);
     const [campaignModalMode, setCampaignModalMode] = useState<'create' | 'edit'>('create');
-    const [campaignModalStep, setCampaignModalStep] = useState<'settings' | 'leads' | 'recordings' | 'setup' | 'advanced'>('settings');
+    const [campaignModalStep, setCampaignModalStep] = useState<'settings' | 'leads' | 'knowledge' | 'recordings' | 'setup' | 'advanced'>('settings');
     const [dialplanNeedsReview, setDialplanNeedsReview] = useState(false);
 
     const [pendingImportFile, setPendingImportFile] = useState<File | null>(null);
     const [pendingVoicemailFile, setPendingVoicemailFile] = useState<File | null>(null);
     const [pendingConsentFile, setPendingConsentFile] = useState<File | null>(null);
+    const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
+    const [pendingKnowledgeFile, setPendingKnowledgeFile] = useState<File | null>(null);
+    const [knowledgeText, setKnowledgeText] = useState({ name: '', content: '' });
     const [manualLeadForm, setManualLeadForm] = useState({
         name: '',
         phone_number: '',
@@ -404,7 +425,10 @@ const CallSchedulingPage = () => {
         consent_enabled: false,
         consent_media_uri: '',
         consent_timeout_seconds: 5,
-        amd_options: { ...DEFAULT_AMD_OPTIONS } as Record<string, any>
+        amd_options: { ...DEFAULT_AMD_OPTIONS } as Record<string, any>,
+        system_prompt: '',
+        qualification_rules_json: JSON.stringify({ required: { decision_maker: true, interested: true } }, null, 2),
+        human_transfer_destination: ''
     });
 
     const [editForm, setEditForm] = useState({ ...createForm });
@@ -602,6 +626,9 @@ const CallSchedulingPage = () => {
         setPendingImportFile(null);
         setPendingVoicemailFile(null);
         setPendingConsentFile(null);
+        setPendingKnowledgeFile(null);
+        setKnowledgeDocuments([]);
+        setKnowledgeText({ name: '', content: '' });
         setLastLeadImport(null);
         setManualLeadForm({
             name: '',
@@ -624,7 +651,10 @@ const CallSchedulingPage = () => {
             consent_enabled: false,
             consent_media_uri: '',
             consent_timeout_seconds: 5,
-            amd_options: { ...defaultAmdOptions }
+            amd_options: { ...defaultAmdOptions },
+            system_prompt: '',
+            qualification_rules_json: JSON.stringify({ required: { decision_maker: true, interested: true } }, null, 2),
+            human_transfer_destination: ''
         });
         setShowCampaignModal(true);
     };
@@ -655,11 +685,15 @@ const CallSchedulingPage = () => {
             consent_enabled: Boolean((selectedCampaign as any).consent_enabled ?? false),
             consent_media_uri: String((selectedCampaign as any).consent_media_uri || '').trim(),
             consent_timeout_seconds: Number((selectedCampaign as any).consent_timeout_seconds ?? 5),
+            system_prompt: String(selectedCampaign.system_prompt || ''),
+            qualification_rules_json: JSON.stringify(selectedCampaign.qualification_rules || {}, null, 2),
+            human_transfer_destination: String(selectedCampaign.human_transfer_destination || ''),
             amd_options:
                 Object.keys(((selectedCampaign as any).amd_options || {}) as Record<string, any>).length > 0
                     ? ((selectedCampaign as any).amd_options || {})
                     : { ...defaultAmdOptions }
         });
+        void loadKnowledgeDocuments(selectedCampaign.id);
         setShowCampaignModal(true);
     };
 
@@ -678,6 +712,8 @@ const CallSchedulingPage = () => {
     const createCampaign = async () => {
         try {
             const payload: any = { ...createForm };
+            payload.qualification_rules = JSON.parse(payload.qualification_rules_json || '{}');
+            delete payload.qualification_rules_json;
             if (payload.voicemail_drop_enabled && !(payload.voicemail_drop_media_uri || '').trim()) {
                 payload.voicemail_drop_media_uri = DEFAULT_VOICEMAIL_MEDIA_URI;
             }
@@ -718,7 +754,10 @@ const CallSchedulingPage = () => {
                 consent_enabled: false,
                 consent_media_uri: '',
                 consent_timeout_seconds: 5,
-                amd_options: {}
+                amd_options: {},
+                system_prompt: '',
+                qualification_rules_json: JSON.stringify({ required: { decision_maker: true, interested: true } }, null, 2),
+                human_transfer_destination: ''
             });
         } catch (e: any) {
             setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || 'Failed to create campaign' });
@@ -728,7 +767,10 @@ const CallSchedulingPage = () => {
     const saveEdit = async () => {
         if (!selectedCampaign) return;
         try {
-            const payload = buildCampaignEditPayload(editForm, selectedCampaign.default_context);
+            const editable: any = { ...editForm };
+            editable.qualification_rules = JSON.parse(editable.qualification_rules_json || '{}');
+            delete editable.qualification_rules_json;
+            const payload = buildCampaignEditPayload(editable, selectedCampaign.default_context);
             await axios.patch(`/api/outbound/campaigns/${selectedCampaign.id}`, payload);
             await refreshCampaigns();
             await refreshCampaignDetails(selectedCampaign.id);
@@ -737,6 +779,65 @@ const CallSchedulingPage = () => {
             setCampaignModalStep('settings');
         } catch (e: any) {
             setNotice({ type: 'error', message: e?.response?.data?.detail || e?.message || 'Failed to update campaign' });
+        }
+    };
+
+    const loadKnowledgeDocuments = async (campaignId?: string) => {
+        const id = campaignId || selectedCampaign?.id;
+        if (!id) return;
+        try {
+            const res = await axios.get(`/api/outbound/campaigns/${id}/knowledge`);
+            setKnowledgeDocuments(Array.isArray(res.data) ? res.data : []);
+        } catch (e: any) {
+            const info = describeApiError(e);
+            setNotice({ type: 'error', message: info.detail || info.message || 'Failed to load campaign knowledge' });
+        }
+    };
+
+    const addKnowledgeText = async () => {
+        if (!selectedCampaign || !knowledgeText.name.trim() || !knowledgeText.content.trim()) return;
+        try {
+            await axios.post(`/api/outbound/campaigns/${selectedCampaign.id}/knowledge/text`, {
+                name: knowledgeText.name.trim(),
+                content: knowledgeText.content,
+                content_type: 'text/plain'
+            });
+            setKnowledgeText({ name: '', content: '' });
+            await loadKnowledgeDocuments(selectedCampaign.id);
+            setNotice({ type: 'success', message: 'Knowledge document added' });
+        } catch (e: any) {
+            const info = describeApiError(e);
+            setNotice({ type: 'error', message: info.detail || info.message || 'Failed to add knowledge document' });
+        }
+    };
+
+    const uploadKnowledgeDocument = async () => {
+        if (!selectedCampaign || !pendingKnowledgeFile) return;
+        const formData = new FormData();
+        formData.append('file', pendingKnowledgeFile);
+        try {
+            await axios.post(
+                `/api/outbound/campaigns/${selectedCampaign.id}/knowledge/upload`,
+                formData,
+                { headers: { 'Content-Type': 'multipart/form-data' } }
+            );
+            setPendingKnowledgeFile(null);
+            await loadKnowledgeDocuments(selectedCampaign.id);
+            setNotice({ type: 'success', message: 'Knowledge document uploaded' });
+        } catch (e: any) {
+            const info = describeApiError(e);
+            setNotice({ type: 'error', message: info.detail || info.message || 'Failed to upload knowledge document' });
+        }
+    };
+
+    const deleteKnowledgeDocument = async (documentId: string) => {
+        if (!selectedCampaign) return;
+        try {
+            await axios.delete(`/api/outbound/campaigns/${selectedCampaign.id}/knowledge/${documentId}`);
+            await loadKnowledgeDocuments(selectedCampaign.id);
+        } catch (e: any) {
+            const info = describeApiError(e);
+            setNotice({ type: 'error', message: info.detail || info.message || 'Failed to delete knowledge document' });
         }
     };
 
@@ -1517,6 +1618,7 @@ const CallSchedulingPage = () => {
                                     <th className="py-2 px-3">Duration</th>
                                     <th className="py-2 px-3">Attempts</th>
                                     <th className="py-2 px-3">Outcome</th>
+                                    <th className="py-2 px-3">Qualification</th>
                                     <th className="py-2 px-3">AMD</th>
                                     <th className="py-2 px-3">DTMF</th>
                                     <th className="py-2 px-3">Call History</th>
@@ -1543,7 +1645,10 @@ const CallSchedulingPage = () => {
                                             <td className="py-2 px-3">{renderLeadTime(l.last_started_at_utc || l.last_attempt_at_utc)}</td>
                                             <td className="py-2 px-3">{renderDuration(l.last_duration_seconds ?? null)}</td>
                                             <td className="py-2 px-3">{l.attempt_count}</td>
-                                            <td className="py-2 px-3">{outcome}</td>
+                                            <td className="py-2 px-3" title={l.outcome_reason || ''}>{outcome}</td>
+                                            <td className="py-2 px-3">
+                                                {l.qualification_score == null ? '-' : `${l.qualification_score}%`}
+                                            </td>
                                             <td className="py-2 px-3 font-mono">{amd}</td>
                                             <td className="py-2 px-3 font-mono">{dtmf}</td>
                                             <td className="py-2 px-3">
@@ -1598,7 +1703,7 @@ const CallSchedulingPage = () => {
                                 })}
                                 {leads.length === 0 && (
                                     <tr>
-                                        <td colSpan={14} className="py-10 text-center text-sm text-muted-foreground">
+                                        <td colSpan={15} className="py-10 text-center text-sm text-muted-foreground">
                                             No leads yet. Use the campaign modal to import a CSV/Excel file or add a lead manually.
                                         </td>
                                     </tr>
@@ -1710,6 +1815,16 @@ const CallSchedulingPage = () => {
                                     onClick={() => setCampaignModalStep('leads')}
                                 >
                                     Leads
+                                </button>
+                                <button
+                                    className={`px-3 py-1 rounded border text-sm ${campaignModalStep === 'knowledge' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                                        }`}
+                                    onClick={() => {
+                                        setCampaignModalStep('knowledge');
+                                        if (selectedCampaign) void loadKnowledgeDocuments(selectedCampaign.id);
+                                    }}
+                                >
+                                    Knowledge
                                 </button>
                                 <button
                                     className={`px-3 py-1 rounded border text-sm ${campaignModalStep === 'recordings' ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
@@ -1859,6 +1974,46 @@ const CallSchedulingPage = () => {
                                                     <option key={agent.slug} value={agent.slug}>{agent.display_name || agent.slug}</option>
                                                 ))}
                                             </datalist>
+                                        </div>
+                                        <div className="md:col-span-2">
+                                            <FormLabel tooltip="Campaign-specific conversational instructions appended to the selected Agent prompt.">Campaign System Prompt</FormLabel>
+                                            <textarea
+                                                rows={5}
+                                                value={campaignModalMode === 'create' ? createForm.system_prompt : editForm.system_prompt}
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, system_prompt: e.target.value }))
+                                                        : setEditForm(p => ({ ...p, system_prompt: e.target.value }))
+                                                }
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background text-sm"
+                                                placeholder="Introduce yourself as an AI assistant, explain the offer briefly, and gather qualification facts naturally."
+                                            />
+                                        </div>
+                                        <div>
+                                            <FormLabel tooltip="Destination key configured under Tools → Transfer Destinations for the existing attended-transfer tool.">Human Transfer Destination</FormLabel>
+                                            <input
+                                                value={campaignModalMode === 'create' ? createForm.human_transfer_destination : editForm.human_transfer_destination}
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, human_transfer_destination: e.target.value }))
+                                                        : setEditForm(p => ({ ...p, human_transfer_destination: e.target.value }))
+                                                }
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background font-mono"
+                                                placeholder="sales_agent"
+                                            />
+                                        </div>
+                                        <div className="md:col-span-2">
+                                            <FormLabel tooltip="Deterministic Python rules. The voice model collects facts but cannot override this result.">Qualification Rules (JSON)</FormLabel>
+                                            <textarea
+                                                rows={8}
+                                                value={campaignModalMode === 'create' ? createForm.qualification_rules_json : editForm.qualification_rules_json}
+                                                onChange={e =>
+                                                    campaignModalMode === 'create'
+                                                        ? setCreateForm(p => ({ ...p, qualification_rules_json: e.target.value }))
+                                                        : setEditForm(p => ({ ...p, qualification_rules_json: e.target.value }))
+                                                }
+                                                className="mt-1 w-full px-3 py-2 rounded-lg border bg-background font-mono text-sm"
+                                            />
                                         </div>
                                     </div>
 
@@ -2104,6 +2259,81 @@ const CallSchedulingPage = () => {
                                             </>
                                         )}
                                     </div>
+                                </div>
+                            ) : campaignModalStep === 'knowledge' ? (
+                                <div className="space-y-4">
+                                    {campaignModalMode === 'create' ? (
+                                        <div className="rounded-lg border p-4 text-sm text-muted-foreground">
+                                            Create the campaign first, then reopen Campaign Setup → Knowledge to attach campaign-scoped documents.
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="border rounded-lg p-3 space-y-3">
+                                                <FormLabel tooltip="Upload UTF-8 text or Markdown. PDF is available when the optional pypdf dependency is installed.">Upload knowledge document</FormLabel>
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <input
+                                                        type="file"
+                                                        accept=".txt,.md,.markdown,.pdf,text/plain,text/markdown,application/pdf"
+                                                        onChange={e => setPendingKnowledgeFile(e.target.files?.[0] || null)}
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm disabled:opacity-50"
+                                                        disabled={!pendingKnowledgeFile || !selectedCampaign}
+                                                        onClick={uploadKnowledgeDocument}
+                                                    >
+                                                        <Upload className="w-4 h-4" /> Upload
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            <div className="border rounded-lg p-3 space-y-3">
+                                                <FormLabel>Add plain text</FormLabel>
+                                                <input
+                                                    value={knowledgeText.name}
+                                                    onChange={e => setKnowledgeText(p => ({ ...p, name: e.target.value }))}
+                                                    className="w-full px-3 py-2 rounded-lg border bg-background"
+                                                    placeholder="Product FAQ"
+                                                />
+                                                <textarea
+                                                    rows={8}
+                                                    value={knowledgeText.content}
+                                                    onChange={e => setKnowledgeText(p => ({ ...p, content: e.target.value }))}
+                                                    className="w-full px-3 py-2 rounded-lg border bg-background text-sm"
+                                                    placeholder="Paste campaign-specific product and policy facts here."
+                                                />
+                                                <button
+                                                    type="button"
+                                                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border hover:bg-muted text-sm disabled:opacity-50"
+                                                    disabled={!knowledgeText.name.trim() || !knowledgeText.content.trim()}
+                                                    onClick={addKnowledgeText}
+                                                >
+                                                    <Plus className="w-4 h-4" /> Add text
+                                                </button>
+                                            </div>
+                                            <div className="border rounded-lg divide-y">
+                                                {knowledgeDocuments.length === 0 ? (
+                                                    <div className="p-3 text-sm text-muted-foreground">No knowledge documents attached.</div>
+                                                ) : knowledgeDocuments.map(document => (
+                                                    <div key={document.id} className="p-3 flex items-center justify-between gap-3">
+                                                        <div>
+                                                            <div className="font-medium text-sm">{document.name}</div>
+                                                            <div className="text-xs text-muted-foreground">
+                                                                {document.chunk_count} chunks · {document.character_count.toLocaleString()} characters
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            className="p-2 rounded border hover:bg-muted text-destructive"
+                                                            onClick={() => deleteKnowledgeDocument(document.id)}
+                                                            aria-label={`Delete ${document.name}`}
+                                                        >
+                                                            <Trash2 className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             ) : campaignModalStep === 'recordings' ? (
                                 <div className="space-y-4">

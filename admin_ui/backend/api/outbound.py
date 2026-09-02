@@ -74,6 +74,16 @@ def _get_outbound_store():
         raise HTTPException(status_code=500, detail="Outbound dialer module not available")
 
 
+def _get_knowledge_store():
+    try:
+        from src.knowledge.base import get_knowledge_base_store
+
+        return get_knowledge_base_store()
+    except ImportError as exc:
+        logger.error("Failed to import campaign knowledge module: %s", exc)
+        raise HTTPException(status_code=500, detail="Campaign knowledge module not available")
+
+
 def _media_dir() -> str:
     # SECURITY: Keep media dir anchored to the known, docker-mounted location.
     # Avoid using a fully user-controlled path via env var (CodeQL path-injection).
@@ -571,6 +581,9 @@ class CampaignCreateRequest(BaseModel):
     consent_media_uri: Optional[str] = None
     consent_timeout_seconds: int = Field(5, ge=1, le=30)
     amd_options: Dict[str, Any] = Field(default_factory=dict)
+    system_prompt: Optional[str] = Field(None, max_length=20000)
+    qualification_rules: Dict[str, Any] = Field(default_factory=dict)
+    human_transfer_destination: Optional[str] = Field(None, max_length=128)
 
 
 class CampaignStatusRequest(BaseModel):
@@ -599,6 +612,12 @@ class ManualLeadCreateRequest(BaseModel):
     timezone: Optional[str] = Field(None, max_length=100)
     caller_id: Optional[str] = Field(None, max_length=64)
     custom_vars: Dict[str, Any] = Field(default_factory=dict)
+
+
+class KnowledgeTextRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    content: str = Field(..., min_length=1, max_length=2_000_000)
+    content_type: str = Field("text/plain", max_length=128)
 
 
 @router.get("/sample.csv")
@@ -753,6 +772,96 @@ async def set_campaign_status(campaign_id: str, req: CampaignStatusRequest):
 async def campaign_stats(campaign_id: str):
     store = _get_outbound_store()
     return await store.campaign_stats(campaign_id)
+
+
+@router.get("/campaigns/{campaign_id}/knowledge")
+async def list_knowledge_documents(campaign_id: str):
+    store = _get_outbound_store()
+    try:
+        await store.get_campaign(campaign_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return await _get_knowledge_store().list_documents(campaign_id)
+
+
+@router.post("/campaigns/{campaign_id}/knowledge/text")
+async def add_knowledge_text(campaign_id: str, req: KnowledgeTextRequest):
+    store = _get_outbound_store()
+    try:
+        await store.get_campaign(campaign_id)
+        return await _get_knowledge_store().add_document(
+            campaign_id,
+            name=req.name,
+            content=req.content,
+            content_type=req.content_type,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/campaigns/{campaign_id}/knowledge/upload")
+async def upload_knowledge_document(campaign_id: str, file: UploadFile = File(...)):
+    store = _get_outbound_store()
+    try:
+        await store.get_campaign(campaign_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+    filename = os.path.basename((file.filename or "knowledge.txt").strip())
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".txt", ".md", ".markdown", ".pdf"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Knowledge documents must be .txt, .md, .markdown, or .pdf",
+        )
+    max_bytes = int(os.getenv("AAVA_KNOWLEDGE_UPLOAD_MAX_BYTES", "5242880"))
+    data = await file.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Knowledge document is too large (max {max_bytes} bytes)",
+        )
+
+    if suffix == ".pdf":
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise HTTPException(
+                status_code=400,
+                detail="PDF ingestion requires the optional pypdf package; upload TXT or Markdown on this installation",
+            )
+        try:
+            reader = PdfReader(io.BytesIO(data))
+            content = "\n\n".join((page.extract_text() or "") for page in reader.pages)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Unable to extract PDF text: {exc}")
+        content_type = "application/pdf"
+    else:
+        try:
+            content = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise HTTPException(status_code=400, detail="Text knowledge documents must use UTF-8")
+        content_type = "text/markdown" if suffix in {".md", ".markdown"} else "text/plain"
+
+    try:
+        return await _get_knowledge_store().add_document(
+            campaign_id,
+            name=filename,
+            content=content,
+            content_type=content_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/campaigns/{campaign_id}/knowledge/{document_id}")
+async def delete_knowledge_document(campaign_id: str, document_id: str):
+    deleted = await _get_knowledge_store().delete_document(campaign_id, document_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Knowledge document not found")
+    return {"ok": True}
 
 
 @router.post("/campaigns/{campaign_id}/leads/import", response_model=LeadImportResponse)

@@ -205,6 +205,15 @@ class CallSession:
     outbound_lead_id: Optional[str] = None
     outbound_attempt_id: Optional[str] = None
     outbound_custom_vars: Dict[str, Any] = field(default_factory=dict)
+    outbound_qualification_state: Dict[str, Any] = field(default_factory=dict)
+    outbound_qualification_evidence: Dict[str, Any] = field(default_factory=dict)
+    outbound_qualification_result: Dict[str, Any] = field(default_factory=dict)
+    outbound_lead_outcome: Optional[str] = None
+    outbound_outcome_reason: Optional[str] = None
+    outbound_callback_at_utc: Optional[str] = None
+    outbound_campaign_prompt: Optional[str] = None
+    outbound_qualification_rules: Dict[str, Any] = field(default_factory=dict)
+    outbound_human_transfer_destination: Optional[str] = None
 
     # External dialer ownership (VICIdial Remote Agent integration).
     # These are call-local snapshots so an operator edit cannot change the

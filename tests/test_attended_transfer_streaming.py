@@ -354,6 +354,146 @@ async def test_attended_transfer_basic_tts_skips_ai_briefing_generation(monkeypa
     assert updated.current_action.get("decision") == "accepted"
 
 
+@pytest.mark.asyncio
+async def test_attended_transfer_direct_accepts_without_tts_or_dtmf(monkeypatch):
+    engine = _build_engine(
+        {
+            "enabled": True,
+            "screening_mode": "direct",
+            "caller_connected_prompt": "This must also be skipped in direct mode.",
+        }
+    )
+    session = CallSession(
+        call_id="call-direct",
+        caller_channel_id="caller-direct",
+        caller_name="Bob",
+        caller_number="15550002222",
+        context_name="support",
+        bridge_id="bridge-direct",
+    )
+    session.current_action = {
+        "type": "attended_transfer",
+        "destination_key": "support_agent",
+        "answered": False,
+        "agent_channel_id": None,
+        "decision": None,
+    }
+    await engine.session_store.upsert_call(session)
+
+    finalized = []
+
+    async def caller_is_active(channel_id):
+        assert channel_id == "caller-direct"
+        return True
+
+    async def fake_finalize(session_obj, **kwargs):
+        persisted = await engine.session_store.get_by_call_id("call-direct")
+        assert persisted is not None
+        assert persisted.current_action["decision"] == "accepted"
+        finalized.append((session_obj, kwargs))
+
+    async def unexpected(*args, **kwargs):
+        raise AssertionError("direct mode must skip screening, TTS, playback, and DTMF")
+
+    monkeypatch.setattr(engine.ari_client, "is_channel_active", caller_is_active)
+    monkeypatch.setattr(engine, "_local_ai_server_tts", unexpected)
+    monkeypatch.setattr(engine, "_wait_for_attended_transfer_dtmf", unexpected)
+    monkeypatch.setattr(engine, "_start_attended_transfer_helper_media", unexpected)
+    monkeypatch.setattr(engine, "_generate_attended_transfer_briefing_text", unexpected)
+    monkeypatch.setattr(engine, "_play_ulaw_bytes_on_channel_and_wait", unexpected)
+    monkeypatch.setattr(engine, "_attended_transfer_abort_and_resume", unexpected)
+    monkeypatch.setattr(engine, "_attended_transfer_finalize_bridge", fake_finalize)
+
+    await engine._handle_attended_transfer_answered(
+        "agent-direct",
+        ["attended-transfer", "call-direct", "support_agent"],
+    )
+
+    assert len(finalized) == 1
+    _, finalize_kwargs = finalized[0]
+    assert finalize_kwargs["agent_channel_id"] == "agent-direct"
+    assert finalize_kwargs["destination_description"] == "Support agent"
+    assert finalize_kwargs["caller_connected_prompt"] == ""
+    updated = await engine.session_store.get_by_call_id("call-direct")
+    assert updated.current_action["answered"] is True
+    assert updated.current_action["agent_channel_id"] == "agent-direct"
+    assert updated.current_action["decision"] == "accepted"
+    assert updated.current_action["decision_digit"] is None
+    assert engine._attended_transfer_agent_channel_to_call_id["agent-direct"] == "call-direct"
+
+
+@pytest.mark.asyncio
+async def test_attended_transfer_direct_rejects_missing_or_invalid_session(monkeypatch):
+    engine = _build_engine({"enabled": True, "screening_mode": "direct"})
+    hung_up = []
+
+    async def fake_hangup(channel_id):
+        hung_up.append(channel_id)
+        return True
+
+    async def unexpected_finalize(*args, **kwargs):
+        raise AssertionError("invalid direct transfer state must not finalize")
+
+    monkeypatch.setattr(engine.ari_client, "hangup_channel", fake_hangup)
+    monkeypatch.setattr(engine, "_attended_transfer_finalize_bridge", unexpected_finalize)
+
+    await engine._handle_attended_transfer_answered(
+        "agent-missing",
+        ["attended-transfer", "call-missing", "support_agent"],
+    )
+
+    invalid = CallSession(
+        call_id="call-invalid",
+        caller_channel_id="caller-invalid",
+        bridge_id="bridge-invalid",
+    )
+    invalid.current_action = {"type": "hangup"}
+    await engine.session_store.upsert_call(invalid)
+    await engine._handle_attended_transfer_answered(
+        "agent-invalid",
+        ["attended-transfer", "call-invalid", "support_agent"],
+    )
+
+    assert hung_up == ["agent-missing", "agent-invalid"]
+    assert "agent-invalid" not in engine._attended_transfer_agent_channel_to_call_id
+
+
+@pytest.mark.asyncio
+async def test_attended_transfer_direct_does_not_finalize_after_caller_hangup(monkeypatch):
+    engine = _build_engine({"enabled": True, "screening_mode": "direct"})
+    session = CallSession(
+        call_id="call-direct-gone",
+        caller_channel_id="caller-direct-gone",
+        bridge_id="bridge-direct-gone",
+    )
+    session.current_action = {"type": "attended_transfer"}
+    await engine.session_store.upsert_call(session)
+
+    aborts = []
+
+    async def caller_is_inactive(channel_id):
+        return False
+
+    async def fake_abort(session_obj, agent_channel_id, *, reason):
+        aborts.append((session_obj.call_id, agent_channel_id, reason))
+
+    async def unexpected_finalize(*args, **kwargs):
+        raise AssertionError("caller hangup must not finalize direct transfer")
+
+    monkeypatch.setattr(engine.ari_client, "is_channel_active", caller_is_inactive)
+    monkeypatch.setattr(engine, "_attended_transfer_abort_and_resume", fake_abort)
+    monkeypatch.setattr(engine, "_attended_transfer_finalize_bridge", unexpected_finalize)
+
+    await engine._handle_attended_transfer_answered(
+        "agent-direct-gone",
+        ["attended-transfer", "call-direct-gone", "support_agent"],
+    )
+
+    assert aborts == [
+        ("call-direct-gone", "agent-direct-gone", "caller-unavailable")
+    ]
+
+
 def test_attended_transfer_template_substitution_keeps_unknown_placeholders():
     engine = _build_engine({"enabled": True})
     session = CallSession(
@@ -385,6 +525,7 @@ def test_attended_transfer_template_substitution_keeps_unknown_placeholders():
 
 def test_attended_transfer_screening_mode_resolution_prefers_explicit_mode():
     engine = _build_engine({"enabled": True})
+    assert engine._resolve_attended_transfer_screening_mode({"screening_mode": "direct"}) == "direct"
     assert engine._resolve_attended_transfer_screening_mode({"screening_mode": "caller_recording"}) == "caller_recording"
     assert engine._resolve_attended_transfer_screening_mode({"screening_mode": "ai_briefing"}) == "ai_briefing"
     assert engine._resolve_attended_transfer_screening_mode({"screening_mode": "ai_summary"}) == "ai_briefing"

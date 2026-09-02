@@ -33,7 +33,10 @@ export default defineConfig({
     server: {
         proxy: {
             '/api': {
-                target: 'http://localhost:8000',
+                // Keep the Windows dev server pointed at the real WSL runtime.
+                // Frontend clients use relative /api paths so auth and all
+                // operational data share the Docker Admin API session/store.
+                target: 'http://127.0.0.1:3003',
                 changeOrigin: true,
             }
         }

@@ -1,235 +1,110 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
+import React, { useState } from 'react';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
-    LayoutDashboard,
-    Server,
-    Workflow,
-    Users,
-    Wrench,
-    Plug,
-    Sliders,
-    Activity,
-    Zap,
-    Brain,
-    Radio,
-    Globe,
-    Container,
-    FileText,
-    Terminal,
-    AlertTriangle,
-    Code,
-    HelpCircle,
-    ExternalLink,
-    Coffee,
-    Heart,
-    HardDrive,
-    ArrowUpCircle,
-    Phone,
-    CalendarClock,
-    LogOut,
-    Lock,
-    ChevronsLeft,
-    ChevronsRight
+    Activity, BarChart3, BookOpen, Bot, Brain, CalendarClock, ChevronLeft,
+    ChevronRight, CircleUserRound, Code2, Container, FileText, Gauge,
+    HardDrive, LayoutDashboard, ListChecks, LogOut, Lock, Phone, Plug,
+    Radio, Server, Settings, Sliders, Terminal, Users, Wrench, Workflow, Zap,
 } from 'lucide-react';
 import { useAuth } from '../../auth/AuthContext';
-import { KOFI_URL, SPONSORS_URL } from '../../config/donation';
 import { useSidebarCollapsed } from '../../hooks/useSidebarCollapsed';
+import { PRODUCT, type ProductMode } from '../../config/product';
 import ChangePasswordModal from '../auth/ChangePasswordModal';
-import { useState } from 'react';
 
-// Shares the collapsed state with the nested item/group components without
-// threading a prop through every SidebarItem.
-const CollapseContext = React.createContext(false);
+type Item = { to: string; icon: React.ElementType; label: string; end?: boolean };
+type Group = { title: string; items: Item[] };
 
-const itemClasses = (collapsed: boolean, active: boolean) =>
-    `flex items-center ${collapsed ? 'justify-center' : 'gap-3'} px-3 py-2 rounded-md text-sm font-medium transition-colors ${active
-        ? 'bg-primary/10 text-primary'
-        : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-    }`;
+const operationsGroups: Group[] = [
+    { title: 'Overview', items: [
+        { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
+        { to: '/analytics', icon: BarChart3, label: 'Analytics' },
+    ] },
+    { title: 'Outbound', items: [
+        { to: '/campaigns', icon: Gauge, label: 'Campaigns' },
+        { to: '/leads', icon: Users, label: 'Leads' },
+        { to: '/calls', icon: Phone, label: 'Calls' },
+        { to: '/callbacks', icon: CalendarClock, label: 'Callbacks' },
+    ] },
+    { title: 'AI', items: [
+        { to: '/agents', icon: Bot, label: 'Agents' },
+        { to: '/knowledge-base', icon: BookOpen, label: 'Knowledge Base' },
+        { to: '/qualification-rules', icon: ListChecks, label: 'Qualification Rules' },
+    ] },
+    { title: 'Settings', items: [
+        { to: '/settings/general', icon: Settings, label: 'General' },
+        { to: '/settings/integrations', icon: Plug, label: 'Integrations' },
+    ] },
+];
 
-const SidebarItem = ({ to, icon: Icon, label, end = false }: { to: string, icon: any, label: string, end?: boolean }) => {
-    const collapsed = React.useContext(CollapseContext);
-    return (
-        <NavLink
-            to={to}
-            end={end}
-            title={collapsed ? label : undefined}
-            aria-label={collapsed ? label : undefined}
-            className={({ isActive }) => itemClasses(collapsed, isActive)}
-        >
-            <Icon className="w-4 h-4 shrink-0" />
-            {!collapsed && <span>{label}</span>}
-        </NavLink>
-    );
-};
-
-const ExternalItem = ({ href, icon: Icon, label, ariaLabel }: { href: string, icon: any, label: string, ariaLabel?: string }) => {
-    const collapsed = React.useContext(CollapseContext);
-    return (
-        <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label={ariaLabel ?? (collapsed ? label : undefined)}
-            title={collapsed ? label : undefined}
-            className={itemClasses(collapsed, false)}
-        >
-            <Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-            {!collapsed && <span>{label}</span>}
-        </a>
-    );
-};
-
-const SidebarGroup = ({ title, children }: { title: string, children: React.ReactNode }) => {
-    const collapsed = React.useContext(CollapseContext);
-    return (
-        <div className="mb-6">
-            {!collapsed && (
-                <h3 className="px-3 mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    {title}
-                </h3>
-            )}
-            <div className="space-y-1">
-                {children}
-            </div>
-        </div>
-    );
-};
-
-const CollapseToggle = ({ collapsed, onToggle }: { collapsed: boolean, onToggle: () => void }) => {
-    const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
-    return (
-        <button
-            type="button"
-            onClick={onToggle}
-            aria-label={label}
-            aria-expanded={!collapsed}
-            title={label}
-            className="p-2 rounded-md text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
-        >
-            {collapsed ? <ChevronsRight className="w-4 h-4" /> : <ChevronsLeft className="w-4 h-4" />}
-        </button>
-    );
-};
+const developerGroups: Group[] = [
+    { title: 'System', items: [
+        { to: '/developer/system-health', icon: Activity, label: 'System Health' },
+        { to: '/docker', icon: Container, label: 'Docker Services' },
+        { to: '/asterisk', icon: Phone, label: 'Asterisk' },
+        { to: '/logs', icon: FileText, label: 'Logs' },
+        { to: '/terminal', icon: Terminal, label: 'Terminal' },
+    ] },
+    { title: 'AI infrastructure', items: [
+        { to: '/providers', icon: Server, label: 'Providers' },
+        { to: '/pipelines', icon: Workflow, label: 'Pipelines' },
+        { to: '/models', icon: HardDrive, label: 'Models' },
+    ] },
+    { title: 'Audio', items: [
+        { to: '/profiles', icon: Sliders, label: 'Audio Profiles' },
+        { to: '/vad', icon: Activity, label: 'Voice Detection' },
+        { to: '/streaming', icon: Zap, label: 'Streaming' },
+        { to: '/transport', icon: Radio, label: 'Audio Transport' },
+        { to: '/barge-in', icon: Radio, label: 'Barge-in' },
+    ] },
+    { title: 'Tooling', items: [
+        { to: '/tools', icon: Wrench, label: 'Tools' },
+        { to: '/mcp', icon: Plug, label: 'MCP' },
+    ] },
+    { title: 'Configuration', items: [
+        { to: '/llm', icon: Brain, label: 'LLM Defaults' },
+        { to: '/yaml', icon: Code2, label: 'Advanced Configuration' },
+    ] },
+];
 
 const Sidebar = () => {
     const { user, logout } = useAuth();
-    const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
     const { collapsed, toggle } = useSidebarCollapsed();
+    const location = useLocation();
+    const navigate = useNavigate();
+    const routeIsDeveloper = ['/developer/', '/providers', '/pipelines', '/profiles', '/tools', '/mcp', '/vad', '/streaming', '/llm', '/transport', '/barge-in', '/yaml', '/env', '/docker', '/asterisk', '/logs', '/terminal', '/models', '/updates', '/wizard'].some(prefix => location.pathname.startsWith(prefix));
+    const [mode, setMode] = useState<ProductMode>(() => routeIsDeveloper ? 'developer' : (localStorage.getItem('callflow-mode') as ProductMode) || 'operations');
+    const [passwordOpen, setPasswordOpen] = useState(false);
+    const groups = mode === 'operations' ? operationsGroups : developerGroups;
+
+    const switchMode = (next: ProductMode) => {
+        localStorage.setItem('callflow-mode', next);
+        setMode(next);
+        navigate(next === 'developer' ? '/developer/system-health' : '/');
+    };
 
     return (
-        <CollapseContext.Provider value={collapsed}>
-            <aside className={`${collapsed ? 'w-16' : 'w-64'} border-r border-border bg-card/50 backdrop-blur flex flex-col h-full transition-[width] duration-200`}>
-                <div className={`${collapsed ? 'p-3' : 'p-6'} border-b border-border/50`}>
-                    <div className={`flex items-center ${collapsed ? 'justify-center' : 'gap-3'} font-bold text-xl tracking-tight`}>
-                        <img
-                            src="/mascot_transparent.png"
-                            alt="AVA Mascot"
-                            className="w-11 h-11 object-contain shrink-0"
-                        />
-                        {!collapsed && (
-                            <div className="flex flex-col leading-none flex-1 min-w-0">
-                                <span>AVA</span>
-                                <span className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider mt-1">AI Voice Agent for Asterisk</span>
-                            </div>
-                        )}
-                        {!collapsed && <CollapseToggle collapsed={collapsed} onToggle={toggle} />}
-                    </div>
-                    {collapsed && (
-                        <div className="flex justify-center mt-3">
-                            <CollapseToggle collapsed={collapsed} onToggle={toggle} />
-                        </div>
-                    )}
-                </div>
-
-                <nav aria-label="Main navigation" className="flex-1 overflow-y-auto py-6 px-3">
-                    <SidebarGroup title="Overview">
-                        <SidebarItem to="/" icon={LayoutDashboard} label="Dashboard" end />
-                        <SidebarItem to="/history" icon={Phone} label="Call History" />
-                        <SidebarItem to="/scheduling" icon={CalendarClock} label="Call Scheduling" />
-                        <SidebarItem to="/wizard" icon={Zap} label="Setup Wizard" />
-                    </SidebarGroup>
-
-                    <SidebarGroup title="Core Configuration">
-                        <SidebarItem to="/agents" icon={Users} label="Agents" />
-                        <SidebarItem to="/providers" icon={Server} label="Providers" />
-                        <SidebarItem to="/pipelines" icon={Workflow} label="Pipelines" />
-                        <SidebarItem to="/profiles" icon={Sliders} label="Audio Profiles" />
-                        <SidebarItem to="/tools" icon={Wrench} label="Tools" />
-                        <SidebarItem to="/mcp" icon={Plug} label="MCP" />
-                    </SidebarGroup>
-
-                    <SidebarGroup title="Advanced Settings">
-                        <SidebarItem to="/vad" icon={Activity} label="Voice Activity Detection" />
-                        <SidebarItem to="/streaming" icon={Zap} label="Streaming" />
-                        <SidebarItem to="/llm" icon={Brain} label="LLM Defaults" />
-                        <SidebarItem to="/transport" icon={Radio} label="Audio Transport" />
-                        <SidebarItem to="/barge-in" icon={AlertTriangle} label="Barge-in" />
-                    </SidebarGroup>
-
-                    <SidebarGroup title="System">
-                        <SidebarItem to="/env" icon={Globe} label="Environment" />
-                        <SidebarItem to="/docker" icon={Container} label="Docker Services" />
-                        <SidebarItem to="/asterisk" icon={Phone} label="Asterisk" />
-                        <SidebarItem to="/models" icon={HardDrive} label="Models" />
-                        <SidebarItem to="/updates" icon={ArrowUpCircle} label="Updates" />
-                        <SidebarItem to="/logs" icon={FileText} label="Logs" />
-                        <SidebarItem to="/terminal" icon={Terminal} label="Terminal" />
-                    </SidebarGroup>
-
-                    <SidebarGroup title="Danger Zone">
-                        <SidebarItem to="/yaml" icon={Code} label="Raw YAML" />
-                    </SidebarGroup>
-
-                    <SidebarGroup title="Support">
-                        <SidebarItem to="/help" icon={HelpCircle} label="Help" />
-                        <ExternalItem href="/docs" icon={ExternalLink} label="API Docs" />
-                        <ExternalItem href={KOFI_URL} icon={Coffee} label="Support on Ko-fi" ariaLabel="Support AVA on Ko-fi" />
-                        <ExternalItem href={SPONSORS_URL} icon={Heart} label="Sponsor" ariaLabel="Sponsor AVA on GitHub" />
-                    </SidebarGroup>
-                </nav>
-
-                <div className="p-4 border-t border-border/50">
-                    <div className={`flex items-center mb-3 ${collapsed ? 'justify-center' : 'gap-3 px-2'}`}>
-                        <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-xs font-bold uppercase shrink-0">
-                            {user?.username?.substring(0, 2) || 'AD'}
-                        </div>
-                        {!collapsed && (
-                            <div className="flex-1 min-w-0">
-                                <p className="text-sm font-medium truncate">{user?.username || 'Admin'}</p>
-                                <p className="text-xs text-muted-foreground truncate">Administrator</p>
-                            </div>
-                        )}
-                    </div>
-                    <div className={`flex gap-2 ${collapsed ? 'flex-col items-center' : ''}`}>
-                        <button
-                            onClick={() => setIsPasswordModalOpen(true)}
-                            className={`${collapsed ? '' : 'flex-1'} flex items-center justify-center gap-2 px-2 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent rounded-md transition-colors`}
-                            title="Change Password"
-                            aria-label={collapsed ? 'Change Password' : undefined}
-                        >
-                            <Lock className="w-3 h-3" />
-                            {!collapsed && 'Password'}
-                        </button>
-                        <button
-                            onClick={logout}
-                            className={`${collapsed ? '' : 'flex-1'} flex items-center justify-center gap-2 px-2 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 rounded-md transition-colors`}
-                            title="Logout"
-                            aria-label={collapsed ? 'Logout' : undefined}
-                        >
-                            <LogOut className="w-3 h-3" />
-                            {!collapsed && 'Logout'}
-                        </button>
-                    </div>
-                </div>
-
-                <ChangePasswordModal
-                    isOpen={isPasswordModalOpen}
-                    onClose={() => setIsPasswordModalOpen(false)}
-                />
-            </aside>
-        </CollapseContext.Provider>
+        <aside className={`${collapsed ? 'w-[72px]' : 'w-[264px]'} flex h-full shrink-0 flex-col border-r border-border bg-card transition-[width] duration-200`}>
+            <div className={`flex h-[72px] items-center border-b border-border ${collapsed ? 'justify-center px-2' : 'gap-3 px-5'}`}>
+                <div className="min-w-0 shrink-0"><img src={collapsed ? '/callflow-mark.png' : '/callflow-logo.png'} alt={collapsed ? PRODUCT.name : `${PRODUCT.name} logo`} className={`${collapsed ? 'h-7 w-7' : 'h-8 w-[142px]'} object-contain object-left brightness-0 invert`} /></div>
+                <button onClick={toggle} aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-expanded={!collapsed} className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground">
+                    {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+                </button>
+            </div>
+            <div className={`mx-3 mt-4 grid rounded-lg bg-muted p-1 ${collapsed ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                {(['operations', 'developer'] as ProductMode[]).map(value => <button key={value} title={value} onClick={() => switchMode(value)} className={`rounded-md px-2 py-1.5 text-xs font-semibold capitalize transition-colors ${mode === value ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{collapsed ? (value === 'operations' ? 'OP' : 'DEV') : value}</button>)}
+            </div>
+            <nav aria-label="Main navigation" data-mode={mode} className="flex-1 overflow-y-auto px-3 py-5">
+                {groups.map(group => <div key={group.title} className="mb-6">
+                    {!collapsed && <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{group.title}</p>}
+                    <div className="space-y-1">{group.items.map(({ to, icon: Icon, label, end }) => <NavLink key={to} to={to} end={end} title={collapsed ? label : undefined} className={({ isActive }) => `flex h-10 items-center rounded-md px-3 text-sm font-medium transition-colors ${collapsed ? 'justify-center' : 'gap-3'} ${isActive ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-accent hover:text-foreground'}`}><Icon className="h-[18px] w-[18px] shrink-0" />{!collapsed && <span>{label}</span>}</NavLink>)}</div>
+                </div>)}
+            </nav>
+            <div className="border-t border-border p-3">
+                <div className={`mb-2 flex items-center ${collapsed ? 'justify-center' : 'gap-3 px-2'} py-2`}><div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-muted"><CircleUserRound className="h-4 w-4" /></div>{!collapsed && <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{user?.username || 'Admin'}</p><p className="text-xs text-muted-foreground">Administrator</p></div>}</div>
+                <div className={`flex ${collapsed ? 'flex-col' : ''} gap-1`}><button onClick={() => setPasswordOpen(true)} title="Change password" className="flex flex-1 items-center justify-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"><Lock className="h-3.5 w-3.5" />{!collapsed && 'Password'}</button><button onClick={logout} title="Sign out" className="flex flex-1 items-center justify-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground hover:bg-red-500/10 hover:text-red-600"><LogOut className="h-3.5 w-3.5" />{!collapsed && 'Sign out'}</button></div>
+            </div>
+            <ChangePasswordModal isOpen={passwordOpen} onClose={() => setPasswordOpen(false)} />
+        </aside>
     );
 };
-
 export default Sidebar;

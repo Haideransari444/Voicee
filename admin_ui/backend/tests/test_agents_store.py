@@ -63,6 +63,24 @@ def test_slugify():
     assert slugify("Maria - Vendas") == "maria_vendas"
     assert slugify("Demo Deepgram!") == "demo_deepgram"
 
+
+def test_explicit_slug_accepts_outbound_safe_hyphen(tmp_path):
+    with AgentsStore(str(tmp_path / "agents.db")) as store:
+        agent = store.create(
+            display_name="NexaFlow SDR",
+            slug="nexaflow-sdr",
+            provider="google_live",
+            prompt="Demo",
+        )
+
+    assert agent["slug"] == "nexaflow-sdr"
+
+
+def test_explicit_slug_still_rejects_unsafe_values(store):
+    for slug in ("Bad Slug", "bad/slash", "a" * 65):
+        with pytest.raises(ValueError, match="invalid slug"):
+            store.create(display_name="Invalid", slug=slug, provider="x", prompt="p")
+
 def test_create_and_get(store):
     a = store.create(display_name="Maria - Vendas", provider="openai_realtime", prompt="p")
     assert a["slug"] == "maria_vendas"

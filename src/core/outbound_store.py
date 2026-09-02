@@ -195,6 +195,9 @@ class OutboundStore:
             consent_media_uri TEXT,
             consent_timeout_seconds INTEGER NOT NULL DEFAULT 5,
             amd_options_json TEXT NOT NULL DEFAULT '{}',
+            system_prompt TEXT,
+            qualification_rules_json TEXT NOT NULL DEFAULT '{}',
+            human_transfer_destination TEXT,
             created_at_utc TEXT NOT NULL,
             updated_at_utc TEXT NOT NULL
         )
@@ -214,6 +217,14 @@ class OutboundStore:
             state TEXT NOT NULL DEFAULT 'pending', -- pending|leased|dialing|amd_pending|in_progress|completed|failed|canceled
             attempt_count INTEGER NOT NULL DEFAULT 0,
             last_outcome TEXT,
+            outcome_reason TEXT,
+            qualification_state_json TEXT NOT NULL DEFAULT '{}',
+            qualification_evidence_json TEXT NOT NULL DEFAULT '{}',
+            qualification_result_json TEXT NOT NULL DEFAULT '{}',
+            qualification_score INTEGER,
+            callback_at_utc TEXT,
+            do_not_call_at_utc TEXT,
+            do_not_call_reason TEXT,
             last_attempt_at_utc TEXT,
             leased_until_utc TEXT,
             created_at_utc TEXT NOT NULL,
@@ -240,6 +251,12 @@ class OutboundStore:
             context TEXT,
             provider TEXT,
             call_history_call_id TEXT,
+            qualification_state_json TEXT NOT NULL DEFAULT '{}',
+            qualification_result_json TEXT NOT NULL DEFAULT '{}',
+            outcome_reason TEXT,
+            summary TEXT,
+            transfer_attempted INTEGER NOT NULL DEFAULT 0,
+            transfer_successful INTEGER NOT NULL DEFAULT 0,
             error_message TEXT
         )
         """,
@@ -308,6 +325,17 @@ class OutboundStore:
                     "ALTER TABLE outbound_campaigns ADD COLUMN agent_routing_method "
                     "TEXT NOT NULL DEFAULT 'ai_context'"
                 )
+            if "system_prompt" not in ccols:
+                cur.execute("ALTER TABLE outbound_campaigns ADD COLUMN system_prompt TEXT")
+            if "qualification_rules_json" not in ccols:
+                cur.execute(
+                    "ALTER TABLE outbound_campaigns ADD COLUMN qualification_rules_json "
+                    "TEXT NOT NULL DEFAULT '{}'"
+                )
+            if "human_transfer_destination" not in ccols:
+                cur.execute(
+                    "ALTER TABLE outbound_campaigns ADD COLUMN human_transfer_destination TEXT"
+                )
 
             # outbound_leads
             lcols = _cols("outbound_leads")
@@ -318,6 +346,18 @@ class OutboundStore:
                     "ALTER TABLE outbound_leads ADD COLUMN agent_routing_method "
                     "TEXT NOT NULL DEFAULT 'ai_context'"
                 )
+            for column, ddl in {
+                "outcome_reason": "TEXT",
+                "qualification_state_json": "TEXT NOT NULL DEFAULT '{}'",
+                "qualification_evidence_json": "TEXT NOT NULL DEFAULT '{}'",
+                "qualification_result_json": "TEXT NOT NULL DEFAULT '{}'",
+                "qualification_score": "INTEGER",
+                "callback_at_utc": "TEXT",
+                "do_not_call_at_utc": "TEXT",
+                "do_not_call_reason": "TEXT",
+            }.items():
+                if column not in lcols:
+                    cur.execute(f"ALTER TABLE outbound_leads ADD COLUMN {column} {ddl}")
 
             # outbound_attempts
             acols = _cols("outbound_attempts")
@@ -331,6 +371,16 @@ class OutboundStore:
                 cur.execute("ALTER TABLE outbound_attempts ADD COLUMN context TEXT")
             if "provider" not in acols:
                 cur.execute("ALTER TABLE outbound_attempts ADD COLUMN provider TEXT")
+            for column, ddl in {
+                "qualification_state_json": "TEXT NOT NULL DEFAULT '{}'",
+                "qualification_result_json": "TEXT NOT NULL DEFAULT '{}'",
+                "outcome_reason": "TEXT",
+                "summary": "TEXT",
+                "transfer_attempted": "INTEGER NOT NULL DEFAULT 0",
+                "transfer_successful": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if column not in acols:
+                    cur.execute(f"ALTER TABLE outbound_attempts ADD COLUMN {column} {ddl}")
         except Exception:
             # Never fail startup due to a best-effort migration.
             logger.debug("Outbound schema migration failed (non-fatal)", exc_info=True)
@@ -377,6 +427,15 @@ class OutboundStore:
             consent_uri = _as_str(payload.get("consent_media_uri")).strip() or None
             consent_timeout = max(1, min(30, _as_int(payload.get("consent_timeout_seconds"), 5)))
             amd_opts = payload.get("amd_options") if isinstance(payload.get("amd_options"), dict) else {}
+            system_prompt = _as_str(payload.get("system_prompt")).strip() or None
+            qualification_rules = (
+                payload.get("qualification_rules")
+                if isinstance(payload.get("qualification_rules"), dict)
+                else {}
+            )
+            human_transfer_destination = (
+                _as_str(payload.get("human_transfer_destination")).strip() or None
+            )
 
             with self._lock:
                 conn = self._get_connection()
@@ -392,6 +451,8 @@ class OutboundStore:
                             voicemail_drop_media_uri,
                             consent_enabled, consent_media_uri, consent_timeout_seconds,
                             amd_options_json,
+                            system_prompt, qualification_rules_json,
+                            human_transfer_destination,
                             created_at_utc, updated_at_utc
                         ) VALUES (
                             ?, ?, ?, ?, ?, ?,
@@ -401,6 +462,8 @@ class OutboundStore:
                             ?, ?, ?,
                             ?,
                             ?, ?, ?,
+                            ?,
+                            ?, ?,
                             ?,
                             ?, ?
                         )
@@ -426,6 +489,9 @@ class OutboundStore:
                             consent_uri,
                             consent_timeout,
                             json.dumps(amd_opts or {}),
+                            system_prompt,
+                            json.dumps(qualification_rules or {}),
+                            human_transfer_destination,
                             now,
                             now,
                         ),
@@ -447,6 +513,10 @@ class OutboundStore:
                 d = dict(row)
                 d["amd_options"] = _safe_json_loads(str(d.get("amd_options_json") or "{}"))
                 d.pop("amd_options_json", None)
+                d["qualification_rules"] = _safe_json_loads(
+                    str(d.get("qualification_rules_json") or "{}")
+                )
+                d.pop("qualification_rules_json", None)
                 return d
             finally:
                 conn.close()
@@ -477,6 +547,10 @@ class OutboundStore:
                         d = dict(r)
                         d["amd_options"] = _safe_json_loads(str(d.get("amd_options_json") or "{}"))
                         d.pop("amd_options_json", None)
+                        d["qualification_rules"] = _safe_json_loads(
+                            str(d.get("qualification_rules_json") or "{}")
+                        )
+                        d.pop("qualification_rules_json", None)
                         out.append(d)
                     return out
                 finally:
@@ -514,6 +588,9 @@ class OutboundStore:
                 "consent_media_uri",
                 "consent_timeout_seconds",
                 "amd_options_json",
+                "system_prompt",
+                "qualification_rules_json",
+                "human_transfer_destination",
             }
 
             updates: Dict[str, Any] = {}
@@ -522,6 +599,12 @@ class OutboundStore:
                     updates[key] = payload[key]
             if "amd_options" in payload and isinstance(payload.get("amd_options"), dict):
                 updates["amd_options_json"] = json.dumps(payload.get("amd_options") or {})
+            if "qualification_rules" in payload:
+                if not isinstance(payload.get("qualification_rules"), dict):
+                    raise ValueError("qualification_rules must be an object")
+                updates["qualification_rules_json"] = json.dumps(
+                    payload.get("qualification_rules") or {}
+                )
 
             if "timezone" in updates:
                 updates["timezone"] = _validate_iana_timezone_name(_as_str(updates.get("timezone")).strip() or "UTC")
@@ -648,7 +731,17 @@ class OutboundStore:
                 finally:
                     conn.close()
 
-        return await self._run(_sync)
+        await self._run(_sync)
+        try:
+            from src.knowledge.base import get_knowledge_base_store
+
+            await get_knowledge_base_store().delete_campaign(campaign_id)
+        except Exception:
+            logger.warning(
+                "Campaign deleted but knowledge cleanup failed",
+                campaign_id=campaign_id,
+                exc_info=True,
+            )
 
     async def clone_campaign(self, campaign_id: str) -> Dict[str, Any]:
         original = await self.get_campaign(campaign_id)
@@ -772,6 +865,8 @@ class OutboundStore:
                         SELECT id
                         FROM outbound_leads
                         WHERE campaign_id = ?
+                          AND do_not_call_at_utc IS NULL
+                          AND (callback_at_utc IS NULL OR callback_at_utc <= ?)
                           AND (
                             state = 'pending'
                             OR (state = 'leased' AND leased_until_utc IS NOT NULL AND leased_until_utc < ?)
@@ -779,7 +874,7 @@ class OutboundStore:
                         ORDER BY created_at_utc ASC
                         LIMIT ?
                         """,
-                        (campaign_id, now, batch),
+                        (campaign_id, now, now, batch),
                     ).fetchall()
                     lead_ids = [str(r["id"]) for r in rows]
                     if not lead_ids:
@@ -842,7 +937,7 @@ class OutboundStore:
                             last_attempt_at_utc=?,
                             leased_until_utc=NULL,
                             updated_at_utc=?
-                        WHERE id=? AND state='leased'
+                        WHERE id=? AND state='leased' AND do_not_call_at_utc IS NULL
                         """,
                         (now, now, lead_id),
                     )
@@ -894,6 +989,306 @@ class OutboundStore:
                         (state, last_outcome, now, lead_id),
                     )
                     conn.commit()
+                finally:
+                    conn.close()
+
+        await self._run(_sync)
+
+    async def get_lead_context(self, lead_id: str) -> Dict[str, Any]:
+        """Return the durable lead plus campaign qualification context."""
+        if not self._enabled:
+            raise RuntimeError("OutboundStore disabled")
+
+        def _sync() -> Dict[str, Any]:
+            with self._lock:
+                conn = self._get_connection()
+                try:
+                    row = conn.execute(
+                        """
+                        SELECT l.*, c.name AS campaign_name, c.system_prompt,
+                               c.qualification_rules_json,
+                               c.human_transfer_destination
+                        FROM outbound_leads l
+                        JOIN outbound_campaigns c ON c.id = l.campaign_id
+                        WHERE l.id=?
+                        """,
+                        (lead_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise KeyError("lead not found")
+                    data = dict(row)
+                    for json_column, output_key in (
+                        ("custom_vars_json", "custom_vars"),
+                        ("qualification_state_json", "qualification_state"),
+                        ("qualification_evidence_json", "qualification_evidence"),
+                        ("qualification_result_json", "qualification_result"),
+                        ("qualification_rules_json", "qualification_rules"),
+                    ):
+                        data[output_key] = _safe_json_loads(
+                            str(data.pop(json_column, "{}") or "{}")
+                        )
+                    return data
+                finally:
+                    conn.close()
+
+        return await self._run(_sync)
+
+    async def update_lead_qualification(
+        self,
+        lead_id: str,
+        *,
+        field: str,
+        value: Any,
+        evidence: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Atomically update one structured qualification field and its evidence."""
+        field_name = str(field or "").strip()
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", field_name):
+            raise ValueError("qualification field must be snake_case and at most 64 characters")
+        try:
+            json.dumps(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("qualification value must be JSON serializable") from exc
+        evidence_text = str(evidence or "").strip()[:2000]
+
+        def _sync() -> Dict[str, Any]:
+            now = _utcnow_iso()
+            with self._lock:
+                conn = self._get_connection()
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    row = conn.execute(
+                        """
+                        SELECT qualification_state_json, qualification_evidence_json
+                        FROM outbound_leads WHERE id=?
+                        """,
+                        (lead_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise KeyError("lead not found")
+                    state = _safe_json_loads(str(row["qualification_state_json"] or "{}"))
+                    evidence_map = _safe_json_loads(
+                        str(row["qualification_evidence_json"] or "{}")
+                    )
+                    state[field_name] = value
+                    evidence_map[field_name] = {
+                        "evidence": evidence_text,
+                        "updated_at_utc": now,
+                    }
+                    state_json = json.dumps(state, separators=(",", ":"), sort_keys=True)
+                    conn.execute(
+                        """
+                        UPDATE outbound_leads
+                        SET qualification_state_json=?, qualification_evidence_json=?,
+                            updated_at_utc=?
+                        WHERE id=?
+                        """,
+                        (
+                            state_json,
+                            json.dumps(evidence_map, separators=(",", ":"), sort_keys=True),
+                            now,
+                            lead_id,
+                        ),
+                    )
+                    if attempt_id:
+                        conn.execute(
+                            """
+                            UPDATE outbound_attempts SET qualification_state_json=?
+                            WHERE id=? AND lead_id=?
+                            """,
+                            (state_json, attempt_id, lead_id),
+                        )
+                    conn.commit()
+                    return {
+                        "qualification_state": state,
+                        "qualification_evidence": evidence_map,
+                    }
+                except Exception:
+                    conn.rollback()
+                    raise
+                finally:
+                    conn.close()
+
+        return await self._run(_sync)
+
+    async def save_qualification_result(
+        self,
+        lead_id: str,
+        result: Dict[str, Any],
+        *,
+        attempt_id: Optional[str] = None,
+    ) -> None:
+        result_json = json.dumps(result or {}, separators=(",", ":"), sort_keys=True)
+        score = _as_int((result or {}).get("score"), 0)
+
+        def _sync() -> None:
+            now = _utcnow_iso()
+            with self._lock:
+                conn = self._get_connection()
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    row = conn.execute(
+                        "SELECT qualification_state_json FROM outbound_leads WHERE id=?",
+                        (lead_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise KeyError("lead not found")
+                    state_json = str(row["qualification_state_json"] or "{}")
+                    conn.execute(
+                        """
+                        UPDATE outbound_leads
+                        SET qualification_result_json=?, qualification_score=?, updated_at_utc=?
+                        WHERE id=?
+                        """,
+                        (result_json, score, now, lead_id),
+                    )
+                    if attempt_id:
+                        conn.execute(
+                            """
+                            UPDATE outbound_attempts
+                            SET qualification_state_json=?, qualification_result_json=?
+                            WHERE id=? AND lead_id=?
+                            """,
+                            (state_json, result_json, attempt_id, lead_id),
+                        )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                finally:
+                    conn.close()
+
+        await self._run(_sync)
+
+    async def set_lead_outcome(
+        self,
+        lead_id: str,
+        *,
+        outcome: str,
+        reason: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+    ) -> None:
+        from src.qualification.schemas import normalize_outcome
+
+        normalized = normalize_outcome(outcome)
+        if normalized is None:
+            raise ValueError("invalid lead outcome")
+        reason_text = str(reason or "").strip()[:2000] or None
+
+        def _sync() -> None:
+            now = _utcnow_iso()
+            with self._lock:
+                conn = self._get_connection()
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    cursor = conn.execute(
+                        """
+                        UPDATE outbound_leads
+                        SET last_outcome=?, outcome_reason=?, updated_at_utc=?
+                        WHERE id=?
+                        """,
+                        (normalized.value, reason_text, now, lead_id),
+                    )
+                    if cursor.rowcount == 0:
+                        raise KeyError("lead not found")
+                    if attempt_id:
+                        conn.execute(
+                            """
+                            UPDATE outbound_attempts SET outcome=?, outcome_reason=?
+                            WHERE id=? AND lead_id=?
+                            """,
+                            (normalized.value, reason_text, attempt_id, lead_id),
+                        )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                finally:
+                    conn.close()
+
+        await self._run(_sync)
+
+    async def schedule_callback(
+        self,
+        lead_id: str,
+        callback_at: str,
+        *,
+        reason: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+    ) -> str:
+        raw = str(callback_at or "").strip()
+        try:
+            callback_dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("callback datetime must be ISO 8601") from exc
+        if callback_dt.tzinfo is None:
+            callback_dt = callback_dt.replace(tzinfo=timezone.utc)
+        normalized_at = callback_dt.astimezone(timezone.utc).isoformat()
+        if callback_dt.astimezone(timezone.utc) <= datetime.now(timezone.utc):
+            raise ValueError("callback datetime must be in the future")
+        await self.set_lead_outcome(
+            lead_id,
+            outcome="CALLBACK",
+            reason=reason,
+            attempt_id=attempt_id,
+        )
+
+        def _sync() -> None:
+            with self._lock:
+                conn = self._get_connection()
+                try:
+                    conn.execute(
+                        "UPDATE outbound_leads SET callback_at_utc=? WHERE id=?",
+                        (normalized_at, lead_id),
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+        await self._run(_sync)
+        return normalized_at
+
+    async def mark_do_not_call(
+        self,
+        lead_id: str,
+        *,
+        reason: Optional[str] = None,
+        attempt_id: Optional[str] = None,
+    ) -> None:
+        """Persist DNC atomically; scheduler and dialing transitions also fail closed."""
+        reason_text = str(reason or "").strip()[:2000] or "Prospect requested no further calls"
+
+        def _sync() -> None:
+            now = _utcnow_iso()
+            with self._lock:
+                conn = self._get_connection()
+                try:
+                    conn.execute("BEGIN IMMEDIATE")
+                    cursor = conn.execute(
+                        """
+                        UPDATE outbound_leads
+                        SET state='canceled', last_outcome='DO_NOT_CALL',
+                            outcome_reason=?, do_not_call_at_utc=?, do_not_call_reason=?,
+                            callback_at_utc=NULL, leased_until_utc=NULL, updated_at_utc=?
+                        WHERE id=?
+                        """,
+                        (reason_text, now, reason_text, now, lead_id),
+                    )
+                    if cursor.rowcount == 0:
+                        raise KeyError("lead not found")
+                    if attempt_id:
+                        conn.execute(
+                            """
+                            UPDATE outbound_attempts SET outcome='DO_NOT_CALL', outcome_reason=?
+                            WHERE id=? AND lead_id=?
+                            """,
+                            (reason_text, attempt_id, lead_id),
+                        )
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
                 finally:
                     conn.close()
 
@@ -1052,7 +1447,10 @@ class OutboundStore:
                         context_candidate = context_raw.strip()
                         context_routing_method = campaign_routing_method
                         if not context_candidate:
-                            context_override = campaign_default_context
+                            # A blank Agent field means this lead inherits the campaign
+                            # Agent dynamically.  Persisting the campaign's current slug
+                            # here would turn that inheritance into a stale lead override.
+                            context_override = None
                         else:
                             candidate_valid = (
                                 bool(
@@ -1177,7 +1575,7 @@ class OutboundStore:
                                 UPDATE outbound_leads
                                 SET name = COALESCE(?, name),
                                     lead_timezone = COALESCE(?, lead_timezone),
-                                    context_override = COALESCE(?, context_override),
+                                    context_override = ?,
                                     agent_routing_method = ?,
                                     caller_id_override = COALESCE(?, caller_id_override),
                                     custom_vars_json = ?,
@@ -1273,6 +1671,10 @@ class OutboundStore:
                             a.context AS last_context,
                             a.provider AS last_provider,
                             a.call_history_call_id AS last_call_history_call_id,
+                            a.outcome_reason AS last_outcome_reason,
+                            a.summary AS last_summary,
+                            a.transfer_attempted AS last_transfer_attempted,
+                            a.transfer_successful AS last_transfer_successful,
                             a.error_message AS last_error_message
                         FROM outbound_leads l
                         LEFT JOIN outbound_attempts a
@@ -1294,6 +1696,18 @@ class OutboundStore:
                         d = dict(r)
                         d["custom_vars"] = _safe_json_loads(str(d.get("custom_vars_json") or "{}"))
                         d.pop("custom_vars_json", None)
+                        d["qualification_state"] = _safe_json_loads(
+                            str(d.get("qualification_state_json") or "{}")
+                        )
+                        d["qualification_evidence"] = _safe_json_loads(
+                            str(d.get("qualification_evidence_json") or "{}")
+                        )
+                        d["qualification_result"] = _safe_json_loads(
+                            str(d.get("qualification_result_json") or "{}")
+                        )
+                        d.pop("qualification_state_json", None)
+                        d.pop("qualification_evidence_json", None)
+                        d.pop("qualification_result_json", None)
                         out.append(d)
                     total_pages = (total + size_i - 1) // size_i
                     return {"leads": out, "total": total, "page": page_i, "page_size": size_i, "total_pages": total_pages}
@@ -1386,7 +1800,7 @@ class OutboundStore:
                                 last_attempt_at_utc=NULL,
                                 leased_until_utc=NULL,
                                 updated_at_utc=?
-                            WHERE id=?
+                            WHERE id=? AND do_not_call_at_utc IS NULL
                             """,
                             (now, lead_id),
                         )
@@ -1399,7 +1813,7 @@ class OutboundStore:
                                 last_outcome=NULL,
                                 leased_until_utc=NULL,
                                 updated_at_utc=?
-                            WHERE id=?
+                            WHERE id=? AND do_not_call_at_utc IS NULL
                             """,
                             (now, lead_id),
                         )
@@ -1507,7 +1921,16 @@ class OutboundStore:
                         """,
                         (campaign_id, size_i, offset),
                     ).fetchall()
-                    out = [dict(r) for r in rows]
+                    out = []
+                    for row in rows:
+                        data = dict(row)
+                        data["qualification_state"] = _safe_json_loads(
+                            str(data.pop("qualification_state_json", "{}") or "{}")
+                        )
+                        data["qualification_result"] = _safe_json_loads(
+                            str(data.pop("qualification_result_json", "{}") or "{}")
+                        )
+                        out.append(data)
                     total_pages = (total + size_i - 1) // size_i
                     return {"attempts": out, "total": total, "page": page_i, "page_size": size_i, "total_pages": total_pages}
                 finally:
@@ -1687,6 +2110,12 @@ class OutboundStore:
         context: Optional[str] = None,
         provider: Optional[str] = None,
         call_history_call_id: Optional[str] = None,
+        qualification_state: Optional[Dict[str, Any]] = None,
+        qualification_result: Optional[Dict[str, Any]] = None,
+        outcome_reason: Optional[str] = None,
+        summary: Optional[str] = None,
+        transfer_attempted: Optional[bool] = None,
+        transfer_successful: Optional[bool] = None,
         error_message: Optional[str] = None,
     ) -> None:
         if not self._enabled:
@@ -1725,6 +2154,12 @@ class OutboundStore:
                             context=COALESCE(?, context),
                             provider=COALESCE(?, provider),
                             call_history_call_id=?,
+                            qualification_state_json=COALESCE(?, qualification_state_json),
+                            qualification_result_json=COALESCE(?, qualification_result_json),
+                            outcome_reason=COALESCE(?, outcome_reason),
+                            summary=COALESCE(?, summary),
+                            transfer_attempted=COALESCE(?, transfer_attempted),
+                            transfer_successful=COALESCE(?, transfer_successful),
                             error_message=?
                         WHERE id=?
                         """,
@@ -1739,6 +2174,20 @@ class OutboundStore:
                             context,
                             provider,
                             call_history_call_id,
+                            (
+                                json.dumps(qualification_state, separators=(",", ":"), sort_keys=True)
+                                if qualification_state is not None
+                                else None
+                            ),
+                            (
+                                json.dumps(qualification_result, separators=(",", ":"), sort_keys=True)
+                                if qualification_result is not None
+                                else None
+                            ),
+                            str(outcome_reason or "").strip() or None,
+                            str(summary or "").strip() or None,
+                            int(bool(transfer_attempted)) if transfer_attempted is not None else None,
+                            int(bool(transfer_successful)) if transfer_successful is not None else None,
                             error_message,
                             attempt_id,
                         ),

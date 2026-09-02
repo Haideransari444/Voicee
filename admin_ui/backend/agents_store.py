@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 DB_DEFAULT = "/app/data/operator/agents.db"
 _SLUG_RE = re.compile(r"[^a-z0-9_]+")
+_EXPLICIT_SLUG_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -211,7 +212,7 @@ class AgentsStore:
                is_operator_managed=1, source_file=None, notes=None,
                email_recipient=None, email_from=None, email_enabled=None) -> dict:
         slug = slug or slugify(display_name)
-        if not slug or not _SLUG_RE.sub("", slug) == slug:
+        if not slug or not _EXPLICIT_SLUG_RE.fullmatch(slug):
             raise ValueError(f"invalid slug: {slug!r}")
         if self.get_by_slug(slug):
             raise ValueError(f"slug exists: {slug}")
